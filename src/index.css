@@ -1,0 +1,100 @@
+@import 'katex/dist/katex.min.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: 13 12 16;
+  --foreground: 229 229 229;
+  --muted-foreground: 163 163 163;
+  --primary: 59 96 115;
+  --secondary: 89 28 45;
+  --card: 36 38 41;
+  --muted: 62 61 64;
+  --primary-foreground: 23 23 23;
+  --secondary-foreground: 229 229 229;
+
+  --status-new: 107 114 128;       /* gray-500 */
+  --status-learning: 249 115 22;  /* orange-500 */
+  --status-reviewing: 59 130 246; /* blue-500 */
+  --status-mastered: 34 197 94;    /* green-500 */
+}
+
+@layer base {
+  html {
+    @apply bg-background; /* Fixes overscroll color on desktop */
+  }
+
+  @keyframes shrink-and-fade-out {
+    from {
+      transform: scaleY(1);
+      opacity: 1;
+      height: 4.5rem; /* Match new smaller height */
+      margin-bottom: 0.5rem;
+      padding-top: 0.75rem;
+      padding-bottom: 0.75rem;
+    }
+    to {
+      transform: scaleY(0);
+      opacity: 0;
+      height: 0;
+      margin-bottom: 0;
+      padding: 0;
+    }
+  }
+}
+
+@layer components {
+  .glass-pane {
+    @apply bg-card/60 backdrop-blur-xl rounded-xl shadow-lg transition-colors duration-300;
+  }
+
+  .input-style {
+    @apply w-full h-full px-3 py-2 bg-transparent border border-white/10 rounded-lg resize-y;
+    @apply focus:outline-none focus:ring-0;
+    min-height: 2.75rem;
+  }
+  
+  .custom-scrollbar::-webkit-scrollbar {
+    width: 6px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 3px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.2);
+  }
+  
+  .animate-shrink-and-fade {
+    animation: shrink-and-fade-out 0.3s ease-out forwards;
+  }
+  
+  /* Reverted to a simpler, more reliable tooltip */
+  .tooltip-box {
+    @apply invisible opacity-0 group-hover:visible group-hover:opacity-100;
+    @apply absolute bottom-full left-1/2 -translate-x-1/2 mb-2; /* Position above parent */
+    @apply w-max max-w-[220px] z-50 pointer-events-none; /* Ensure it's on top */
+    @apply bg-background border border-muted-foreground/30 text-muted-foreground text-xs font-semibold rounded-lg shadow-lg px-3 py-1.5;
+    @apply transition-opacity duration-200;
+  }
+}
+
+/* Subtle gradient background for more depth */
+@layer base {
+  body::before {
+    content: '';
+    position: fixed;
+    inset: -20%;
+    background:
+      radial-gradient(60vw 60vw at -10% -10%, rgba(255,255,255,0.06), transparent 60%),
+      radial-gradient(50vw 50vw at 110% 0%, rgba(59,130,246,0.08), transparent 55%),
+      radial-gradient(50vw 50vw at 50% 120%, rgba(236,72,153,0.06), transparent 60%);
+    pointer-events: none;
+    z-index: -1;
+  }
+}
