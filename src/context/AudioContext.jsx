@@ -4,26 +4,39 @@ import { createContext, useContext, useMemo, useRef, useState, useEffect, useCal
 const AudioContextState = createContext(null);
 export const useAudio = () => useContext(AudioContextState);
 
+// Windowing caps
+const PREV_MAX = 20;        // keep last 20 previously played
+const NEXT_MAX = 20;        // keep at most 20 upcoming
+const VISIBLE_NEXT = 5;     // show only next 5 in UI (store up to 20)
+
 export function AudioProvider({ children }) {
   const audioRef = useRef(typeof Audio !== 'undefined' ? new Audio() : null);
 
-  const [queue, setQueueState] = useState([]); // [{ id, title, artist, url }]
-  const [currentIndex, setCurrentIndex] = useState(0);
+  const [queue, setQueueState] = useState([]); // windowed: [current, next...<=20]
+  const [currentIndex, setCurrentIndex] = useState(0); // always 0 after windowing
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [shuffle, setShuffle] = useState(false);
 
-  // History for UI (previous songs) and navigation
-  const [previousTracks, setPreviousTracks] = useState([]); // [{id,title,artist,url}]
+  const [previousTracks, setPreviousTracks] = useState([]); // capped to PREV_MAX
   const watchdogRef = useRef(null);
 
   const currentTrack = queue[currentIndex];
 
+  // Helpers to maintain the window: keep current at index 0, then up to NEXT_MAX upcoming
+  const enforceWindow = useCallback((arr, curIdx) => {
+    if (!arr.length) return [];
+    const cur = arr[curIdx] ?? arr[0];
+    const next = arr.slice(curIdx + 1, curIdx + 1 + NEXT_MAX);
+    return [cur, ...next];
+  }, []);
+
+  // Safe load of current track into the audio element
   const loadCurrent = useCallback(() => {
     const audio = audioRef.current;
     if (!audio || !queue.length) return;
-    const track = queue[currentIndex];
+    const track = queue[0]; // after windowing current is at 0
     if (!track) return;
     if (audio.src !== track.url) {
       audio.src = track.url;
@@ -31,10 +44,11 @@ export function AudioProvider({ children }) {
       audio.crossOrigin = 'anonymous';
       audio.load();
     }
-  }, [queue, currentIndex]);
+  }, [queue]);
 
-  useEffect(() => { loadCurrent(); }, [loadCurrent]); // load only on source change [web:214]
+  useEffect(() => { loadCurrent(); }, [loadCurrent]); // load only on source change
 
+  // Core media events + iOS near-end watchdog
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
@@ -43,7 +57,6 @@ export function AudioProvider({ children }) {
       setCurrentTime(audio.currentTime);
       const dur = audio.duration || 0;
       setDuration(dur);
-      // Near-end watchdog for iOS background regressions
       if (dur && audio.currentTime >= dur - 0.25 && isPlaying) {
         clearTimeout(watchdogRef.current);
         watchdogRef.current = setTimeout(() => {
@@ -52,9 +65,7 @@ export function AudioProvider({ children }) {
       }
     };
 
-    const handleEnded = () => {
-      next(true);
-    };
+    const handleEnded = () => { next(true); };
 
     audio.addEventListener('timeupdate', onTime);
     audio.addEventListener('ended', handleEnded);
@@ -63,13 +74,13 @@ export function AudioProvider({ children }) {
       audio.removeEventListener('ended', handleEnded);
       clearTimeout(watchdogRef.current);
     };
-  }, [isPlaying]); // iOS background mitigation [web:233]
+  }, [isPlaying]); // mitigates iOS background “ended” gaps
 
   const play = useCallback(async () => {
     const audio = audioRef.current;
     if (!audio) return;
     try { await audio.play(); setIsPlaying(true); if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing'; } catch {}
-  }, []); // Media Session state keeps OS controls in sync [web:213]
+  }, []); // keep OS controls synced
 
   const pause = useCallback(() => {
     const audio = audioRef.current;
@@ -77,133 +88,149 @@ export function AudioProvider({ children }) {
     audio.pause();
     setIsPlaying(false);
     if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
-  }, []); // Media Session playbackState update [web:213]
+  }, []); // OS controls state
 
-  const toggle = useCallback(() => { isPlaying ? pause() : play(); }, [isPlaying, play, pause]); // toggle [web:214]
+  const toggle = useCallback(() => { isPlaying ? pause() : play(); }, [isPlaying, play, pause]);
 
   const seek = useCallback((t) => {
     const audio = audioRef.current;
     if (!audio) return;
     const safeDur = Number.isFinite(duration) && duration > 0 ? duration : (audio.duration || 0);
     audio.currentTime = Math.max(0, Math.min(t, safeDur));
-  }, [duration]); // bounded seek [web:214]
+  }, [duration]); // bounded seek
 
   const rewind = useCallback((seconds = 10) => {
     const audio = audioRef.current;
     if (!audio) return;
     audio.currentTime = Math.max(0, (audio.currentTime || 0) - seconds);
-  }, []); // seekbackward action target [web:213]
+  }, []);
 
-  const recordPrevious = useCallback((idx) => {
-    const t = queue[idx];
-    if (!t) return;
-    setPreviousTracks((arr) => {
-      const next = [...arr, t];
-      return next.slice(-50); // keep last 50
-    });
-  }, [queue]); // keep limited history for UI [web:214]
-
+  // Advance: push current into previous (cap PREV_MAX), shift next window
   const next = useCallback((auto = false) => {
     if (!queue.length) return;
-    recordPrevious(currentIndex);
-    setCurrentIndex((i) => (i + 1 < queue.length ? i + 1 : 0));
+    const cur = queue[0];
+    setPreviousTracks((arr) => [...arr, cur].slice(-PREV_MAX));
+    setQueueState((q) => {
+      const upcoming = q.slice(1); // already windowed
+      const newArr = enforceWindow(upcoming, 0); // next becomes current at index 0
+      return newArr;
+    });
+    setCurrentIndex(0);
     setTimeout(() => {
       if (auto || isPlaying) {
         audioRef.current?.play().catch(() => {});
         if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
       }
     }, 0);
-  }, [queue.length, currentIndex, isPlaying, recordPrevious]); // advance and auto-play [web:214]
+  }, [queue, isPlaying, enforceWindow]);
 
+  // Previous: pop from history (cap PREV_MAX), insert back as current
   const prev = useCallback(() => {
-    // Prefer last item from history if present
     setPreviousTracks((arr) => {
-      if (!arr.length) {
-        setCurrentIndex((i) => (i - 1 >= 0 ? i - 1 : Math.max(0, queue.length - 1)));
-        setTimeout(() => { if (isPlaying) audioRef.current?.play().catch(() => {}); }, 0);
-        return arr;
-      }
+      if (!arr.length) return arr;
       const prior = arr[arr.length - 1];
-      const idxInQueue = queue.findIndex((t) => t.id === prior.id);
-      if (idxInQueue >= 0) {
-        setCurrentIndex(idxInQueue);
-        setTimeout(() => { if (isPlaying) audioRef.current?.play().catch(() => {}); }, 0);
-        return arr.slice(0, -1);
-      }
-      // If not in queue, insert just before current and jump
       setQueueState((q) => {
-        const clone = [...q];
-        clone.splice(Math.max(0, currentIndex), 0, prior);
-        setCurrentIndex(Math.max(0, currentIndex));
-        setTimeout(() => { if (isPlaying) audioRef.current?.play().catch(() => {}); }, 0);
-        return clone;
+        const rest = q.length ? q.slice(0) : [];
+        // Put prior back as current, shift existing current/right window down (trim tail to NEXT_MAX)
+        const combined = [prior, ...rest].slice(0, 1 + NEXT_MAX);
+        return combined;
       });
+      setCurrentIndex(0);
+      setTimeout(() => { if (isPlaying) audioRef.current?.play().catch(() => {}); }, 0);
       return arr.slice(0, -1);
     });
-  }, [queue, isPlaying, currentIndex]); // true previous behavior for hardware button [web:213]
+  }, [isPlaying]); // true previous using history
 
-  useEffect(() => { if (!queue.length || !isPlaying) return; audioRef.current?.play().catch(() => {}); }, [currentIndex, queue, isPlaying]); // play when track changes [web:214]
+  // Play if already playing when current changes
+  useEffect(() => { if (!queue.length || !isPlaying) return; audioRef.current?.play().catch(() => {}); }, [queue, isPlaying]);
 
+  // Initialize windowed queue (take current + up to NEXT_MAX next)
   const setQueue = useCallback((tracks, startIndex = 0) => {
-    setQueueState(tracks || []);
-    setCurrentIndex(startIndex);
-  }, []); // passive set [web:214]
+    if (!tracks?.length) { setQueueState([]); setCurrentIndex(0); return; }
+    const bounded = enforceWindow(tracks, Math.max(0, Math.min(startIndex, tracks.length - 1)));
+    setQueueState(bounded);
+    setCurrentIndex(0);
+  }, [enforceWindow]);
 
   const setQueueAndStart = useCallback((tracks, startIndex = 0) => {
-    setQueueState(tracks || []);
-    setCurrentIndex(startIndex);
+    setQueue(tracks, startIndex);
     setIsPlaying(true);
-  }, []); // auto-start [web:214]
+  }, [setQueue]); // auto-start
 
-  const addToQueue = useCallback((track) => { setQueueState((q) => [...q, track]); }, []); // append [web:214]
-
-  const insertNextAndPlay = useCallback((track) => {
+  // Append to tail (still trimmed to NEXT_MAX)
+  const addToQueue = useCallback((track) => {
     setQueueState((q) => {
-      const exists = q.findIndex((t) => t.id === track.id);
-      let arr = [...q];
-      // Move if exists, else insert after current
-      if (exists >= 0) {
-        const [m] = arr.splice(exists, 1);
-        arr.splice(currentIndex + 1, 0, m);
-      } else {
-        arr.splice(currentIndex + 1, 0, track);
-      }
-      setCurrentIndex(currentIndex + 1);
-      setIsPlaying(true);
-      setTimeout(() => { audioRef.current?.play().catch(() => {}); }, 0);
-      return arr;
+      if (!q.length) return [track];
+      const cur = q[0];
+      const upcoming = q.slice(1);
+      const unique = upcoming.filter((t) => t.id !== track.id);
+      const next = [...unique, track].slice(0, NEXT_MAX);
+      return [cur, ...next];
     });
-  }, [currentIndex]); // click to play & add to queue [web:214]
+  }, []); // bounded append
 
+  // Insert at visible slot and play it immediately; discard old 20th
+  const insertAtVisibleSlotAndPlay = useCallback((track) => {
+    setQueueState((q) => {
+      if (!q.length) return [track];
+      const cur = q[0];
+      const upcoming = q.slice(1);
+      const filtered = upcoming.filter((t) => t.id !== track.id);
+      const insertPos = Math.min(VISIBLE_NEXT, filtered.length); // 0..5 within upcoming
+      const next = [...filtered.slice(0, insertPos), track, ...filtered.slice(insertPos)].slice(0, NEXT_MAX);
+      setCurrentIndex(0);     // current stays at 0; we want the inserted item to be next to play
+      setIsPlaying(true);
+      // Jump to the inserted item if wanting immediate playback:
+      setTimeout(() => {
+        // Make inserted item the new current by rebuilding the window
+        const rest = next.filter((t) => t.id !== track.id);
+        setQueueState([track, ...rest.slice(0, NEXT_MAX)]);
+        audioRef.current?.play().catch(() => {});
+      }, 0);
+      return [cur, ...next];
+    });
+  }, []); // windowed insert & promote
+
+  // Remove an item from upcoming window
   const removeFromQueue = useCallback((id) => {
     setQueueState((q) => {
-      const idx = q.findIndex((t) => t.id === id);
-      const newQ = q.filter((t) => t.id !== id);
-      if (idx === -1) return newQ;
-      setCurrentIndex((i) => {
-        if (newQ.length === 0) return 0;
-        if (idx < i) return Math.max(0, i - 1);
-        if (idx === i) return Math.min(i, newQ.length - 1);
-        return i;
-      });
-      return newQ;
+      if (!q.length) return q;
+      const cur = q[0];
+      const filtered = q.slice(1).filter((t) => t.id !== id);
+      return [cur, ...filtered];
     });
-  }, []); // maintain index after removal [web:214]
+  }, []);
 
-  const reorderQueue = useCallback((from, to) => {
+  // Drag & drop reorder within upcoming window
+  const reorderQueue = useCallback((fromAbs, toAbs) => {
+    // Absolute indices relative to full window where 0 is current; we only support >=1 moves
+    if (fromAbs === 0 || toAbs === 0) return;
     setQueueState((q) => {
-      const arr = [...q];
-      const [moved] = arr.splice(from, 1);
-      arr.splice(to, 0, moved);
-      setCurrentIndex((i) => {
-        if (from === i) return to;
-        if (from < i && to >= i) return i - 1;
-        if (from > i && to <= i) return i + 1;
-        return i;
-      });
-      return arr;
+      const cur = q[0];
+      const up = q.slice(1);
+      const from = fromAbs - 1;
+      const to = toAbs - 1;
+      const arr = [...up];
+      const [m] = arr.splice(from, 1);
+      arr.splice(to, 0, m);
+      return [cur, ...arr];
     });
-  }, []); // drag/drop reorder [web:214]
+  }, []);
+
+  // Shuffle upcoming (keep current at index 0)
+  const shuffleQueue = useCallback(() => {
+    setQueueState((q) => {
+      if (q.length <= 2) return q;
+      const cur = q[0];
+      const up = [...q.slice(1)];
+      for (let i = up.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [up[i], up[j]] = [up[j], up[i]];
+      }
+      return [cur, ...up];
+    });
+    setShuffle(true);
+  }, []); // keep window size
 
   // Media Session metadata + action handlers
   useEffect(() => {
@@ -215,7 +242,7 @@ export function AudioProvider({ children }) {
         navigator.mediaSession.setPositionState?.({ duration: duration || 0, playbackRate: 1, position: currentTime || 0 });
       } catch {}
     }
-  }, [currentTrack, currentTime, duration]); // show correct track to OS [web:213]
+  }, [currentTrack, currentTime, duration]);
 
   useEffect(() => {
     if (!('mediaSession' in navigator)) return;
@@ -227,24 +254,28 @@ export function AudioProvider({ children }) {
     set('seekbackward', (e) => { const off = e?.seekOffset || 10; seek(Math.max(0, (audioRef.current?.currentTime || 0) - off)); });
     set('seekforward', (e) => { const off = e?.seekOffset || 10; seek((audioRef.current?.currentTime || 0) + off); });
     set('seekto', (e) => { if (typeof e?.seekTime === 'number') seek(e.seekTime); });
-  }, [play, pause, next, prev, seek]); // hardware control support [web:213]
+  }, [play, pause, next, prev, seek]); // hardware controls
 
-  const playAt = useCallback((idx) => {
-    if (!queue.length) return;
-    const prevIdx = currentIndex;
-    const prevTrack = queue[prevIdx];
-    if (prevTrack) setPreviousTracks((arr) => [...arr, prevTrack].slice(-50));
-    setCurrentIndex(Math.max(0, Math.min(idx, queue.length - 1)));
-    setIsPlaying(true);
-    setTimeout(() => { audioRef.current?.play().catch(() => {}); }, 0);
-  }, [queue.length, currentIndex]); // tap to play [web:214]
+  // Tap to immediately play a specific item (rebuild window)
+  const playAt = useCallback((idxInWindow) => {
+    setQueueState((q) => {
+      if (!q.length) return q;
+      const picked = q[idxInWindow] ?? q[0];
+      const others = q.filter((_, i) => i !== idxInWindow);
+      const newQ = [picked, ...others.slice(0, NEXT_MAX)];
+      setIsPlaying(true);
+      setTimeout(() => { audioRef.current?.play().catch(() => {}); }, 0);
+      return newQ;
+    });
+    setCurrentIndex(0);
+  }, []); // tap-to-play within window
 
   const value = useMemo(() => ({
     queue, currentIndex, isPlaying, currentTime, duration, shuffle, currentTrack, previousTracks,
     play, pause, toggle, next, prev, seek, rewind,
-    setQueue, setQueueAndStart, addToQueue, insertNextAndPlay, removeFromQueue, reorderQueue, shuffleQueue, setShuffle,
-    playAt
-  }), [queue, currentIndex, isPlaying, currentTime, duration, shuffle, currentTrack, previousTracks, play, pause, toggle, next, prev, seek, rewind, setQueue, setQueueAndStart, addToQueue, insertNextAndPlay, removeFromQueue, reorderQueue, shuffleQueue, playAt]);
+    setQueue, setQueueAndStart, addToQueue, insertAtVisibleSlotAndPlay, removeFromQueue, reorderQueue, shuffleQueue, setShuffle,
+    playAt, VISIBLE_NEXT, NEXT_MAX, PREV_MAX
+  }), [queue, currentIndex, isPlaying, currentTime, duration, shuffle, currentTrack, previousTracks, play, pause, toggle, next, prev, seek, rewind, setQueue, setQueueAndStart, addToQueue, insertAtVisibleSlotAndPlay, removeFromQueue, reorderQueue, shuffleQueue, playAt]);
 
   return <AudioContextState.Provider value={value}>{children}</AudioContextState.Provider>;
 }

@@ -8,7 +8,7 @@ import QueuePanel from '../components/QueuePanel.jsx';
 
 export default function PlaylistPage() {
   const { id: playlistId } = useParams();
-  const { setQueue, insertNextAndPlay } = useAudio();
+  const { setQueue, insertAtVisibleSlotAndPlay } = useAudio();
   const [tracks, setTracks] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -23,16 +23,11 @@ export default function PlaylistPage() {
       if (error) throw error;
 
       const paths = rows.map(r => r.songs.storage_path);
-      if (!paths.length) {
-        setTracks([]);
-        setQueue([], 0);
-        setLoading(false);
-        return;
-      }
+      if (!paths.length) { setTracks([]); setQueue([], 0); setLoading(false); return; }
       const { data: signed } = await supabase.storage.from('songs').createSignedUrls(paths, 3600);
       const ts = rows.map((r, i) => ({ id: r.songs.id, title: r.songs.title, artist: r.songs.artist || '', url: signed[i].signedUrl }));
       setTracks(ts);
-      setQueue(ts, 0); // passive
+      setQueue(ts, 0); // seed window (current + up to NEXT_MAX)
     } catch {
       setTracks([]);
       setQueue([], 0);
@@ -43,21 +38,10 @@ export default function PlaylistPage() {
 
   useEffect(() => { if (playlistId) load(); }, [playlistId]);
 
-  const onClickTrack = (t) => { insertNextAndPlay(t); }; // add next + play [web:214]
-
   return (
     <div className="max-w-6xl mx-auto p-4 space-y-6">
-      {/* Section 1: Player */}
-      <section>
-        <PlayerControls floating />
-      </section>
-
-      {/* Section 2: Queue */}
-      <section>
-        <QueuePanel showNext={20} />
-      </section>
-
-      {/* Section 3: Playlist tracks */}
+      <section><PlayerControls floating /></section>
+      <section><QueuePanel /></section>
       <section className="rounded-2xl bg-white/10 backdrop-blur-xl ring-1 ring-white/10 shadow-2xl p-4">
         <div className="text-sm font-medium mb-3">Tracks</div>
         {loading ? (
@@ -67,11 +51,7 @@ export default function PlaylistPage() {
         ) : (
           <ul className="space-y-2">
             {tracks.map((t, i) => (
-              <li
-                key={t.id}
-                className="group flex items-center justify-between gap-3 px-3 py-2 rounded-lg ring-1 ring-white/10 bg-white/5"
-                onClick={() => onClickTrack(t)}
-              >
+              <li key={t.id} className="group flex items-center justify-between gap-3 px-3 py-2 rounded-lg ring-1 ring-white/10 bg-white/5" onClick={() => insertAtVisibleSlotAndPlay(t)}>
                 <div className="flex items-center gap-3 min-w-0 flex-1">
                   <span className="w-6 text-xs text-gray-300 text-right">{i + 1}</span>
                   <div className="min-w-0">
@@ -79,7 +59,7 @@ export default function PlaylistPage() {
                     <div className="text-xs text-gray-300 truncate">{t.artist || 'Unknown'}</div>
                   </div>
                 </div>
-                <button className="shrink-0 text-xs px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20">Play next</button>
+                <button className="shrink-0 text-xs px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20">Add to Queue</button>
               </li>
             ))}
           </ul>
