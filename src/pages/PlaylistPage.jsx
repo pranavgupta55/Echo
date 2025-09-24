@@ -9,7 +9,7 @@ import AddSongsDrawer from '../components/AddSongsDrawer.jsx';
 
 export default function PlaylistPage() {
   const { id: playlistId } = useParams();
-  const { setQueue, shuffleQueue } = useAudio();
+  const { setQueue, shuffleQueue, playAt, addToQueue } = useAudio();
   const [tracks, setTracks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -73,13 +73,32 @@ export default function PlaylistPage() {
               <div className="text-sm text-gray-300">No songs in this playlist</div>
             ) : (
               <ul className="space-y-2">
-                {tracks.map((t) => (
-                  <li key={t.id} className="flex items-center justify-between gap-3 px-3 py-2 rounded-xl bg-white/5 ring-1 ring-white/10">
-                    <div className="min-w-0 truncate">
-                      <div className="text-sm font-medium truncate">{t.title}</div>
-                      <div className="text-xs text-gray-300 truncate">{t.artist || 'Unknown'}</div>
+                {tracks.map((t, i) => (
+                  <li
+                    key={t.id}
+                    className="group flex items-center justify-between gap-3 px-3 py-2 rounded-lg bg-white/5 ring-1 ring-white/10"
+                    onClick={() => playAt(i)}
+                    onDoubleClick={() => addToQueue(t)}
+                    onPointerDown={(e) => {
+                      // long-press to add to queue (600ms)
+                      e.currentTarget._lp = setTimeout(() => addToQueue(t), 600);
+                    }}
+                    onPointerUp={(e) => { clearTimeout(e.currentTarget._lp); }}
+                    onPointerLeave={(e) => { clearTimeout(e.currentTarget._lp); }}
+                  >
+                    <div className="flex items-center gap-3 min-w-0 flex-1">
+                      <span className="w-6 text-xs text-gray-300 text-right">{i + 1}</span>
+                      <div className="min-w-0">
+                        <div className="text-sm font-medium truncate">{t.title}</div>
+                        <div className="text-xs text-gray-300 truncate">{t.artist || 'Unknown'}</div>
+                      </div>
                     </div>
-                    <button onClick={() => removeFromPlaylist(t.id)} className="shrink-0 text-xs px-3 py-1.5 rounded-lg bg-red-500/80 hover:bg-red-500 text-white">Remove</button>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); removeFromPlaylist(t.id); }}
+                      className="shrink-0 text-xs px-3 py-1.5 rounded-lg bg-red-500/80 hover:bg-red-500 text-white"
+                    >
+                      Remove
+                    </button>
                   </li>
                 ))}
               </ul>

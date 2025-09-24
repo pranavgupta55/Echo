@@ -4,7 +4,7 @@ import { useAudio } from '../context/AudioContext.jsx';
 export default function QueuePanel() {
   const { queue, currentIndex, removeFromQueue } = useAudio();
   return (
-    <aside className="glass-pane p-4 max-h-80 overflow-auto custom-scrollbar">
+    <aside className="glass-pane p-4 sticky top-16 max-h-[30vh] sm:max-h-80 overflow-auto custom-scrollbar">
       <div className="text-sm font-medium mb-2">Queue</div>
       <ul className="space-y-2">
         {queue.map((t, i) => (
