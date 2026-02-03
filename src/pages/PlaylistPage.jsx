@@ -5,12 +5,14 @@ import { supabase } from '../lib/supabaseClient';
 import { useAudio } from '../context/AudioContext.jsx';
 import PlayerControls from '../components/PlayerControls.jsx';
 import QueuePanel from '../components/QueuePanel.jsx';
+import AddSongsDrawer from '../components/AddSongsDrawer.jsx';
 
 export default function PlaylistPage() {
   const { id: playlistId } = useParams();
   const { setQueue, insertAtVisibleSlotAndPlay } = useAudio();
   const [tracks, setTracks] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -43,7 +45,16 @@ export default function PlaylistPage() {
       <section><PlayerControls floating /></section>
       <section><QueuePanel /></section>
       <section className="rounded-2xl bg-white/10 backdrop-blur-xl ring-1 ring-white/10 shadow-2xl p-4">
-        <div className="text-sm font-medium mb-3">Tracks</div>
+        <div className="flex items-center justify-between mb-3">
+          <div className="text-sm font-medium">Tracks</div>
+          <button 
+            onClick={() => setDrawerOpen(true)}
+            className="px-3 py-1.5 rounded-lg bg-white text-black text-xs font-medium shadow-lg hover:bg-gray-200 transition-colors"
+          >
+            Add Songs
+          </button>
+        </div>
+        
         {loading ? (
           <div className="text-sm text-gray-300">Loading…</div>
         ) : tracks.length === 0 ? (
@@ -65,6 +76,13 @@ export default function PlaylistPage() {
           </ul>
         )}
       </section>
+
+      <AddSongsDrawer 
+        open={drawerOpen} 
+        onClose={() => setDrawerOpen(false)} 
+        playlistId={playlistId} 
+        onChanged={load}
+      />
     </div>
   );
 }
