@@ -1,4 +1,3 @@
-// src/components/PlayerControls.jsx
 import { useAudio } from '../context/AudioContext.jsx';
 import { HiBackward, HiForward, HiPlay, HiPause, HiArrowsRightLeft } from 'react-icons/hi2';
 
@@ -51,11 +50,13 @@ export default function PlayerControls({ floating = false }) {
             />
             <span className="w-10 text-[10px] tabular-nums text-gray-500">{fmt(duration)}</span>
           </div>
-          {currentTrack && (
+          {currentTrack ? (
             <div className="text-center">
-              <div className="text-sm font-semibold text-white truncate px-4">{currentTrack.title}</div>
-              <div className="text-[11px] text-gray-500 truncate px-4">{currentTrack.artist}</div>
+              <div className="text-sm font-semibold text-white truncate px-4">{currentTrack.title || 'Untitled'}</div>
+              <div className="text-[11px] text-gray-500 truncate px-4">{currentTrack.artist || 'Unknown Artist'}</div>
             </div>
+          ) : (
+            <div className="text-center text-[11px] text-gray-500 italic">No track playing</div>
           )}
         </div>
       </div>
