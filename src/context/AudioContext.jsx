@@ -1,4 +1,3 @@
-// src/context/AudioContext.jsx
 import { createContext, useContext, useRef, useState, useEffect, useCallback, useMemo } from 'react';
 
 const AudioContextState = createContext(null);
@@ -7,22 +6,20 @@ export const useAudio = () => useContext(AudioContextState);
 export function AudioProvider({ children }) {
   const audioRef = useRef(typeof Audio !== 'undefined' ? new Audio() : null);
   
-  // State for Spotify-style logic
   const [currentTrack, setCurrentTrack] = useState(null);
-  const [manualQueue, setManualQueue] = useState([]); // User-added "Add to Queue"
-  const [contextTracks, setContextTracks] = useState([]); // Current sequence (shuffled or ordered)
-  const [originalContext, setOriginalContext] = useState([]); // Backup for un-shuffling
-  const [contextIndex, setContextIndex] = useState(-1); // Pointer within contextTracks
+  const [manualQueue, setManualQueue] = useState([]);
+  const [contextTracks, setContextTracks] = useState([]); 
+  const [originalContext, setOriginalContext] = useState([]); 
+  const [contextIndex, setContextIndex] = useState(-1);
   
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [isShuffle, setIsShuffle] = useState(false);
 
-  // Sync HTML5 Audio element with currentTrack state
   useEffect(() => {
     const audio = audioRef.current;
-    if (!audio || !currentTrack) return;
+    if (!audio || !currentTrack?.url) return;
     if (audio.src !== currentTrack.url) {
       audio.src = currentTrack.url;
       audio.load();
@@ -30,7 +27,6 @@ export function AudioProvider({ children }) {
     }
   }, [currentTrack]);
 
-  // Audio Event Listeners
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
@@ -53,15 +49,12 @@ export function AudioProvider({ children }) {
   const toggle = () => isPlaying ? pause() : play();
   const seek = (t) => { if (audioRef.current) audioRef.current.currentTime = t; };
 
-  // NAVIGATION LOGIC
   const next = useCallback(() => {
     if (manualQueue.length > 0) {
-      // 1. Priority: Play from Manual Queue
       const nextTrack = manualQueue[0];
       setManualQueue(prev => prev.slice(1));
       setCurrentTrack(nextTrack);
     } else {
-      // 2. Fallback: Play from Context
       const nextIdx = contextIndex + 1;
       if (nextIdx < contextTracks.length) {
         setContextIndex(nextIdx);
@@ -73,7 +66,6 @@ export function AudioProvider({ children }) {
   }, [manualQueue, contextTracks, contextIndex]);
 
   const prev = useCallback(() => {
-    // Spotify logic: back button usually ignores manual queue and moves in context
     const prevIdx = contextIndex - 1;
     if (prevIdx >= 0) {
       setContextIndex(prevIdx);
@@ -81,22 +73,24 @@ export function AudioProvider({ children }) {
     }
   }, [contextTracks, contextIndex]);
 
-  // QUEUE OPERATIONS
   const startContext = useCallback((tracks, startIndex = 0) => {
+    if (!tracks || tracks.length === 0) return;
     setOriginalContext(tracks);
     setContextTracks(tracks);
     setContextIndex(startIndex);
     setCurrentTrack(tracks[startIndex]);
-    setManualQueue([]); // Clearing manual queue on new playlist start
+    setManualQueue([]); 
     setIsShuffle(false);
     setIsPlaying(true);
   }, []);
 
   const addToQueue = (track) => {
+    if (!track) return;
     setManualQueue(prev => [...prev, track]);
   };
 
   const playNext = (track) => {
+    if (!track) return;
     setManualQueue(prev => [track, ...prev]);
   };
 
@@ -106,10 +100,8 @@ export function AudioProvider({ children }) {
 
   const clearManualQueue = () => setManualQueue([]);
 
-  // SHUFFLE LOGIC
   const toggleShuffle = useCallback(() => {
     if (!isShuffle) {
-      // Turn Shuffle ON
       const remaining = [...contextTracks.slice(contextIndex + 1)];
       for (let i = remaining.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
@@ -119,11 +111,10 @@ export function AudioProvider({ children }) {
       setContextTracks(newSequence);
       setIsShuffle(true);
     } else {
-      // Turn Shuffle OFF
       const currentId = currentTrack?.id;
       const originalIdx = originalContext.findIndex(t => t.id === currentId);
       setContextTracks(originalContext);
-      setContextIndex(originalIdx);
+      setContextIndex(originalIdx !== -1 ? originalIdx : 0);
       setIsShuffle(false);
     }
   }, [isShuffle, contextTracks, contextIndex, originalContext, currentTrack]);
