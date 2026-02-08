@@ -1,91 +1,72 @@
 // src/components/QueuePanel.jsx
 import { useAudio } from '../context/AudioContext.jsx';
-import { useRef, useState, useEffect } from 'react';
 
 export default function QueuePanel() {
-  const { queue, currentIndex, previousTracks, reorderQueue, removeFromQueue, playAt, VISIBLE_NEXT } = useAudio();
-  const [drag, setDrag] = useState({ idx: null, over: null });
-  const itemRefs = useRef({});
+  const { currentTrack, manualQueue, contextTracks, contextIndex, removeFromManual, clearManualQueue } = useAudio();
 
-  // Visible subset for 'Up next' (but store keeps more)
-  const nextListAll = queue.slice(1);             // all upcoming in window
-  const nextVisible = nextListAll.slice(0, VISIBLE_NEXT); // only first 5 rendered
+  const nextUpContext = contextTracks.slice(contextIndex + 1);
 
-  // Drag only within visible next subset (absolute indices start at 1)
-  const startDrag = (absIdx) => {
-    setDrag({ idx: absIdx, over: absIdx });
-    const move = (ev) => {
-      const y = ev.clientY ?? ev.touches?.[0]?.clientY ?? 0;
-      let over = drag.over;
-      for (const [k, el] of Object.entries(itemRefs.current)) {
-        const rect = el?.getBoundingClientRect?.();
-        if (!rect) continue;
-        if (y >= rect.top && y <= rect.bottom) { over = Number(k); break; }
-      }
-      setDrag((d) => d.idx == null ? d : { ...d, over });
-    };
-    const end = () => {
-      setDrag((d) => {
-        if (d.idx != null && d.over != null && d.idx !== d.over) reorderQueue(d.idx, d.over);
-        return { idx: null, over: null };
-      });
-      window.removeEventListener('pointermove', move);
-      window.removeEventListener('pointerup', end);
-      window.removeEventListener('touchmove', move);
-      window.removeEventListener('touchend', end);
-    };
-    window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', end);
-    window.addEventListener('touchmove', move);
-    window.addEventListener('touchend', end);
-  };
-
-  useEffect(() => () => { itemRefs.current = {}; }, [currentIndex]); // reset refs when queue shifts [attached_file:259]
+  const TrackRow = ({ track, isManual, index }) => (
+    <li className="flex items-center justify-between gap-3 px-3 py-2 rounded-lg ring-1 ring-white/5 bg-white/5 group">
+      <div className="min-w-0 flex-1">
+        <div className="text-sm font-medium truncate">{track.title}</div>
+        <div className="text-xs text-gray-400 truncate">{track.artist || 'Unknown Artist'}</div>
+      </div>
+      {isManual && (
+        <button 
+          onClick={() => removeFromManual(track.id)}
+          className="opacity-0 group-hover:opacity-100 text-xs text-red-400 hover:text-red-300 transition-opacity"
+        >
+          Remove
+        </button>
+      )}
+    </li>
+  );
 
   return (
-    <div className="rounded-2xl bg-white/10 backdrop-blur-xl ring-1 ring-white/10 shadow-2xl p-4">
-      <div className="max-h-[45vh] overflow-auto custom-scrollbar">
-        {/* Previous (greyed, capped in context) */}
-        <div className="text-sm font-medium mb-2">Previously</div>
-        <ul className="space-y-2 mb-4">
-          {previousTracks.slice().reverse().map((t, i) => (
-            <li key={`${t.id}-prev-${i}`} className="flex items-center justify-between gap-3 px-3 py-2 rounded-lg ring-1 ring-white/10 bg-white/5 opacity-60">
-              <div className="min-w-0">
-                <div className="text-sm font-medium truncate">{t.title}</div>
-                <div className="text-xs text-gray-300 truncate">{t.artist || 'Unknown'}</div>
-              </div>
-            </li>
-          ))}
-        </ul>
+    <div className="rounded-2xl bg-white/5 backdrop-blur-xl border border-white/10 shadow-2xl p-6 space-y-8">
+      {/* 1. NOW PLAYING */}
+      <section>
+        <h3 className="text-[10px] font-bold text-gray-500 uppercase tracking-[0.2em] mb-4">Now Playing</h3>
+        {currentTrack ? (
+          <div className="flex items-center gap-4 p-3 rounded-xl bg-white/10 ring-1 ring-white/20">
+            <div className="w-12 h-12 bg-gradient-to-br from-gray-700 to-black rounded flex items-center justify-center text-xl">
+              🎵
+            </div>
+            <div className="min-w-0">
+              <div className="text-base font-semibold truncate text-white">{currentTrack.title}</div>
+              <div className="text-sm text-gray-400 truncate">{currentTrack.artist}</div>
+            </div>
+          </div>
+        ) : (
+          <div className="text-sm text-gray-500 italic">No track selected</div>
+        )}
+      </section>
 
-        {/* Up next (only VISIBLE_NEXT shown) */}
-        <div className="text-sm font-medium mb-2">Up next</div>
-        <ul className="space-y-2">
-          {nextVisible.map((t, i) => {
-            const absIndex = 1 + i; // absolute within window
-            const dragging = drag.idx === absIndex;
-            return (
-              <li
-                key={t.id}
-                ref={(el) => { itemRefs.current[absIndex] = el; }}
-                className={`flex items-center justify-between gap-3 px-3 py-2 rounded-lg ring-1 ring-white/10 bg-white/5 select-none touch-none ${dragging ? 'outline outline-2 outline-white/30' : ''}`}
-                onPointerDown={() => startDrag(absIndex)}
-                onTouchStart={() => startDrag(absIndex)}
-              >
-                <div className="min-w-0 flex-1">
-                  <div className="text-sm font-medium truncate">{t.title}</div>
-                  <div className="text-xs text-gray-300 truncate">{t.artist || 'Unknown'}</div>
-                </div>
-                <div className="flex items-center gap-2 shrink-0">
-                  <button onClick={() => playAt(absIndex)} className="text-xs px-2 py-1.5 rounded bg-white/10 hover:bg-white/20">Play</button>
-                  <button onClick={() => removeFromQueue(t.id)} className="text-xs px-2 py-1.5 rounded bg-red-500/80 hover:bg-red-500 text-white">Remove</button>
-                </div>
-              </li>
-            );
-          })}
-          {nextVisible.length === 0 && <li className="text-xs text-gray-400">No upcoming songs</li>}
+      {/* 2. MANUAL QUEUE */}
+      {manualQueue.length > 0 && (
+        <section>
+          <div className="flex justify-between items-center mb-4">
+            <h3 className="text-[10px] font-bold text-gray-500 uppercase tracking-[0.2em]">Next in Queue</h3>
+            <button onClick={clearManualQueue} className="text-[10px] text-gray-400 hover:text-white uppercase font-bold">Clear All</button>
+          </div>
+          <ul className="space-y-2">
+            {manualQueue.map((t, i) => <TrackRow key={`manual-${t.id}-${i}`} track={t} isManual />)}
+          </ul>
+        </section>
+      )}
+
+      {/* 3. CONTEXT QUEUE */}
+      <section>
+        <h3 className="text-[10px] font-bold text-gray-500 uppercase tracking-[0.2em] mb-4">Next From Playlist</h3>
+        <ul className="space-y-2 max-h-[300px] overflow-y-auto custom-scrollbar">
+          {nextUpContext.length > 0 ? (
+            nextUpContext.map((t, i) => <TrackRow key={`context-${t.id}-${i}`} track={t} />)
+          ) : (
+            <div className="text-xs text-gray-600 italic">End of playlist</div>
+          )}
         </ul>
-      </div>
+      </section>
     </div>
   );
 }
