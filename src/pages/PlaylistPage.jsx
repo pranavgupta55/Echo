@@ -1,4 +1,3 @@
-// src/pages/PlaylistPage.jsx
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { supabase } from '../lib/supabaseClient';
@@ -24,19 +23,28 @@ export default function PlaylistPage() {
         .order('position', { ascending: true });
       if (error) throw error;
 
-      const paths = rows.map(r => r.songs.storage_path);
-      if (!paths.length) { setTracks([]); setLoading(false); return; }
+      // Filter out any rows where the song join failed (safety against broken refs)
+      const validRows = (rows || []).filter(r => r.songs);
+      
+      const paths = validRows.map(r => r.songs.storage_path);
+      if (!paths.length) { 
+        setTracks([]); 
+        setLoading(false); 
+        return; 
+      }
       
       const { data: signed } = await supabase.storage.from('songs').createSignedUrls(paths, 3600);
-      const ts = rows.map((r, i) => ({ 
+      
+      const ts = validRows.map((r, i) => ({ 
         id: r.songs.id, 
         title: r.songs.title, 
         artist: r.songs.artist || 'Unknown', 
-        url: signed[i].signedUrl 
-      }));
+        url: signed?.[i]?.signedUrl || ''
+      })).filter(t => t.url); // Only keep tracks with valid signed URLs
+
       setTracks(ts);
     } catch (err) {
-      console.error(err);
+      console.error("Failed to load playlist:", err);
     } finally {
       setLoading(false);
     }
@@ -62,6 +70,8 @@ export default function PlaylistPage() {
           
           {loading ? (
             <div className="text-sm text-gray-400">Loading playlist...</div>
+          ) : tracks.length === 0 ? (
+            <div className="text-sm text-gray-500 italic py-10 text-center">This playlist is empty</div>
           ) : (
             <ul className="space-y-1">
               {tracks.map((t, i) => (
