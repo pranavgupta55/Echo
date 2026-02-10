@@ -31,6 +31,14 @@ export default function UploadPage() {
   // Status line
   const [status, setStatus] = useState('');
 
+  // 1. Safety Measure: Client-side Alphabetical Sort
+  // This ensures the UI stays sorted even during local state transitions
+  const sortedLibrary = useMemo(() => {
+    return [...library].sort((a, b) => 
+      (a.title || '').localeCompare(b.title || '', undefined, { sensitivity: 'base', numeric: true })
+    );
+  }, [library]);
+
   // Load playlists and artist suggestions
   const loadMeta = async () => {
     const [{ data: pls }, { data: arts }] = await Promise.all([
@@ -49,7 +57,8 @@ export default function UploadPage() {
       const { data, error } = await supabase
         .from('songs')
         .select('id,title,artist,storage_path,created_at')
-        .order('created_at', { ascending: false });
+        // 2. Safety Measure: Database-level sort
+        .order('title', { ascending: true }); 
       if (error) throw error;
       setLibrary(data || []);
     } catch {
@@ -119,15 +128,12 @@ export default function UploadPage() {
     });
   };
 
-  // Build a safe Storage key (UUID + safe suffix + original extension)
   const buildKey = (userId, file, wantName) => {
     const ext = file.name.includes('.') ? '.' + file.name.split('.').pop() : '';
     const safe = sanitize(wantName || '');
-    // Always prefix with UUID to avoid collisions; include safe suffix for traceability
     return `${userId}/${crypto.randomUUID()}${safe ? '-' + safe : ''}${ext}`;
   };
 
-  // Upload all pending rows
   const uploadAll = async () => {
     if (!rows.length) return;
     setStatus('Uploading…');
@@ -144,7 +150,7 @@ export default function UploadPage() {
         try {
           const key = buildKey(user.id, r.file, r.wantName);
           const { error: upErr } = await supabase.storage.from('songs').upload(key, r.file, { upsert: true });
-          if (upErr) throw upErr; // Storage upload [web:12]
+          if (upErr) throw upErr;
 
           const title = r.title || r.file.name.replace(/\.[^/.]+$/, '');
           const artist = r.artist || '';
@@ -153,14 +159,14 @@ export default function UploadPage() {
             .insert({ user_id: user.id, title, artist, storage_path: key })
             .select('id')
             .single();
-          if (dbErr) throw dbErr; // Insert into songs table [web:156]
+          if (dbErr) throw dbErr;
 
           if (r.addTo?.size) {
             const payload = Array.from(r.addTo).map((pid) => ({ playlist_id: pid, song_id: inserted.id }));
             const { error: linkErr } = await supabase
               .from('playlist_songs')
               .upsert(payload, { onConflict: 'playlist_id,song_id', ignoreDuplicates: true });
-            if (linkErr) throw linkErr; // Join-table upsert [web:160][web:147]
+            if (linkErr) throw linkErr;
           }
           results.push({ file: r.file.name, ok: true });
         } catch (e) {
@@ -168,7 +174,6 @@ export default function UploadPage() {
         }
       }
 
-      // Refresh library and clear pending only if all succeeded or skipped
       await Promise.all([loadMeta(), loadLibrary()]);
       setRows([]);
       const failed = results.filter((r) => !r.ok);
@@ -178,7 +183,6 @@ export default function UploadPage() {
     }
   };
 
-  // Library selection helpers
   const toggleSelectOne = (id) => {
     setSelectedLib((s) => {
       const n = new Set(s);
@@ -189,44 +193,43 @@ export default function UploadPage() {
   const selectAll = () => setSelectedLib(new Set(library.map((s) => s.id)));
   const clearSelection = () => setSelectedLib(new Set());
 
-  // Single delete with inline confirm
   const requestDeleteOne = (id) => setConfirmId((prev) => (prev === id ? null : id));
   const deleteOne = async (song) => {
     try {
       await supabase.from('songs').delete().eq('id', song.id);
-      await supabase.storage.from('songs').remove([song.storage_path]); // Remove object [web:12]
+      await supabase.storage.from('songs').remove([song.storage_path]);
       setConfirmId(null);
       await loadLibrary();
     } catch {}
   };
 
-  // Bulk delete with confirm toggle
   const bulkDelete = async () => {
     const ids = Array.from(selectedLib);
     if (!ids.length) return;
     const paths = library.filter((s) => selectedLib.has(s.id)).map((s) => s.storage_path);
     try {
-      await supabase.from('songs').delete().in('id', ids); // Delete rows [web:156]
-      if (paths.length) await supabase.storage.from('songs').remove(paths); // Delete files [web:12]
+      await supabase.from('songs').delete().in('id', ids);
+      if (paths.length) await supabase.storage.from('songs').remove(paths);
       setBulkConfirm(false);
       setSelectedLib(new Set());
       await loadLibrary();
     } catch {}
   };
 
-  // Rename inline
   const onRename = async (song, title, artist) => {
+    // Optimization: Only update if something actually changed
+    if (song.title === title && song.artist === artist) return;
     try {
-      await supabase.from('songs').update({ title, artist }).eq('id', song.id); // Update metadata [web:174]
+      await supabase.from('songs').update({ title, artist }).eq('id', song.id);
       await loadLibrary();
     } catch {}
   };
 
   return (
-    <div className="max-w-6xl mx-auto p-4 space-y-8">
+    <div className="max-w-6xl mx-auto p-4 space-y-8 text-white">
       <h1 className="text-3xl font-semibold tracking-tight">Upload to Library</h1>
 
-      {/* Uploader */}
+      {/* Uploader Section */}
       <div className="rounded-2xl bg-white/10 backdrop-blur-xl ring-1 ring-white/10 shadow-2xl p-4">
         <div className="flex flex-wrap items-center gap-3">
           <label className="text-sm px-4 py-2 rounded-xl bg-white/10 hover:bg-white/20 cursor-pointer">
@@ -237,7 +240,7 @@ export default function UploadPage() {
             <input type="checkbox" checked={skipDupes} onChange={(e) => setSkipDupes(e.target.checked)} />
             Skip detected duplicates
           </label>
-          <button onClick={uploadAll} className="px-4 py-2 rounded-xl bg-white text-black shadow-lg">Upload</button>
+          <button onClick={uploadAll} className="px-4 py-2 rounded-xl bg-white text-black shadow-lg font-medium">Upload</button>
           <div className="text-sm text-gray-300">{status}</div>
         </div>
 
@@ -267,7 +270,7 @@ export default function UploadPage() {
                           const v = e.target.value;
                           setRows((rs) => detectDuplicates(rs.map((x, i) => (i === idx ? { ...x, title: v } : x))));
                         }}
-                        className="w-full px-3 py-2 rounded-lg bg-white/10 ring-1 ring-white/10 outline-none"
+                        className="w-full px-3 py-2 rounded-lg bg-white/10 ring-1 ring-white/10 outline-none focus:ring-white/30"
                       />
                     </td>
                     <td className="py-2 pr-4">
@@ -278,7 +281,7 @@ export default function UploadPage() {
                           const v = e.target.value;
                           setRows((rs) => detectDuplicates(rs.map((x, i) => (i === idx ? { ...x, artist: v } : x))));
                         }}
-                        className="w-full px-3 py-2 rounded-lg bg-white/10 ring-1 ring-white/10 outline-none"
+                        className="w-full px-3 py-2 rounded-lg bg-white/10 ring-1 ring-white/10 outline-none focus:ring-white/30"
                         placeholder="Type or choose"
                       />
                       <datalist id="artist-list">
@@ -298,10 +301,9 @@ export default function UploadPage() {
                             return n;
                           });
                         }}
-                        className="w-full px-3 py-2 rounded-lg bg-white/10 ring-1 ring-white/10 outline-none"
+                        className="w-full px-3 py-2 rounded-lg bg-white/10 ring-1 ring-white/10 outline-none focus:ring-white/30"
                         placeholder="Optional file name piece"
                       />
-                      <div className="text-[11px] text-gray-400 mt-1">Will be sanitized and prefixed with a UUID to avoid collisions.</div>
                     </td>
                     <td className="py-2 pr-4">
                       <div className="flex flex-wrap gap-2">
@@ -309,7 +311,7 @@ export default function UploadPage() {
                           <button
                             key={pl.id}
                             onClick={() => toggleAddTo(idx, pl.id)}
-                            className={`px-3 py-1.5 rounded-lg ${r.addTo.has(pl.id) ? 'bg-white text-black' : 'bg-white/10 hover:bg-white/20'}`}
+                            className={`px-3 py-1.5 rounded-lg transition-colors ${r.addTo.has(pl.id) ? 'bg-white text-black' : 'bg-white/10 hover:bg-white/20'}`}
                           >
                             {pl.name}
                           </button>
@@ -319,7 +321,7 @@ export default function UploadPage() {
                     <td className="py-2 pr-4">
                       {r.duplicate ? (
                         <span className="inline-block px-2 py-1 rounded bg-yellow-400/20 text-yellow-200 ring-1 ring-yellow-400/30">
-                          Duplicate ({r.dupReason})
+                          Duplicate
                         </span>
                       ) : (
                         <span className="inline-block px-2 py-1 rounded bg-emerald-400/20 text-emerald-200 ring-1 ring-emerald-400/30">
@@ -335,64 +337,86 @@ export default function UploadPage() {
         )}
       </div>
 
-      {/* Library with multi-select delete and inline rename */}
+      {/* Library Section */}
       <div className="rounded-2xl bg-white/10 backdrop-blur-xl ring-1 ring-white/10 shadow-2xl p-4">
-        <div className="flex items-center justify-between mb-3">
-          <div className="text-sm font-medium">Library</div>
-          <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
+          <div className="text-xl font-medium">Library ({library.length})</div>
+          <div className="flex flex-wrap items-center gap-2">
             <button onClick={loadLibrary} className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20">Refresh</button>
             <button onClick={selectAll} className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20">Select all</button>
             <button onClick={clearSelection} className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20">Clear</button>
             {!bulkConfirm ? (
-              <button onClick={() => setBulkConfirm(true)} className="px-3 py-1.5 rounded-lg bg-red-500/80 hover:bg-red-500 text-white">
+              <button 
+                onClick={() => setBulkConfirm(true)} 
+                disabled={selectedLib.size === 0}
+                className="px-3 py-1.5 rounded-lg bg-red-500/80 hover:bg-red-500 text-white disabled:opacity-50 disabled:cursor-not-allowed"
+              >
                 Delete selected ({selectedLib.size})
               </button>
             ) : (
-              <button onClick={bulkDelete} className="px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-black">
-                Confirm delete ({selectedLib.size})
+              <button onClick={bulkDelete} className="px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-black font-bold">
+                Confirm deletion
               </button>
             )}
           </div>
         </div>
 
         {loadingLib ? (
-          <div className="text-sm text-gray-300">Loading…</div>
-        ) : library.length === 0 ? (
-          <div className="text-sm text-gray-300">No songs yet</div>
+          <div className="py-10 text-center text-gray-400">Loading library...</div>
+        ) : sortedLibrary.length === 0 ? (
+          <div className="py-10 text-center text-gray-400">No songs found in your library.</div>
         ) : (
-          <ul className="space-y-2">
-            {library.map((song) => {
+          <ul className="grid grid-cols-1 gap-2">
+            {sortedLibrary.map((song) => {
               const selected = selectedLib.has(song.id);
               const inConfirm = confirmId === song.id;
               return (
-                <li key={song.id} className={`flex items-center justify-between gap-3 px-3 py-2 rounded-xl bg-white/5 ring-1 ring-white/10 ${selected ? 'outline outline-1 outline-white/20' : ''}`}>
-                  <div className="flex items-center gap-3 min-w-0 flex-1">
-                    <input type="checkbox" checked={selected} onChange={() => toggleSelectOne(song.id)} />
-                    <div className="min-w-0">
+                <li 
+                  key={song.id} 
+                  className={`flex items-center justify-between gap-3 px-4 py-3 rounded-xl transition-all duration-200 ${
+                    selected ? 'bg-white/20 ring-1 ring-white/30' : 'bg-white/5 ring-1 ring-white/10 hover:bg-white/10'
+                  }`}
+                >
+                  <div className="flex items-center gap-4 min-w-0 flex-1">
+                    <input 
+                      type="checkbox" 
+                      className="w-4 h-4 rounded border-white/20 bg-white/10"
+                      checked={selected} 
+                      onChange={() => toggleSelectOne(song.id)} 
+                    />
+                    <div className="min-w-0 flex-1">
                       <input
                         defaultValue={song.title}
                         onBlur={(e) => onRename(song, e.target.value, song.artist)}
-                        className="bg-transparent outline-none text-sm font-medium w-full"
+                        className="bg-transparent border-none focus:ring-0 text-sm font-semibold w-full p-0 overflow-hidden text-ellipsis whitespace-nowrap"
+                        placeholder="Song Title"
                       />
-                      <div className="text-xs text-gray-300">
-                        <input
-                          defaultValue={song.artist || ''}
-                          onBlur={(e) => onRename(song, song.title, e.target.value)}
-                          className="bg-transparent outline-none w-full"
-                          placeholder="Artist"
-                        />
-                      </div>
+                      <input
+                        defaultValue={song.artist || ''}
+                        onBlur={(e) => onRename(song, song.title, e.target.value)}
+                        className="bg-transparent border-none focus:ring-0 text-xs text-gray-400 w-full p-0 overflow-hidden text-ellipsis whitespace-nowrap"
+                        placeholder="Add Artist"
+                      />
                     </div>
                   </div>
-                  {!inConfirm ? (
-                    <button onClick={() => requestDeleteOne(song.id)} className="shrink-0 text-xs px-3 py-1.5 rounded-lg bg-red-500/80 hover:bg-red-500 text-white">
-                      Delete
-                    </button>
-                  ) : (
-                    <button onClick={() => deleteOne(song)} className="shrink-0 text-xs px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-black">
-                      Confirm
-                    </button>
-                  )}
+                  
+                  <div className="flex items-center gap-2">
+                    {!inConfirm ? (
+                      <button 
+                        onClick={() => requestDeleteOne(song.id)} 
+                        className="shrink-0 text-xs px-3 py-1.5 rounded-lg bg-white/5 hover:bg-red-500/20 text-gray-400 hover:text-red-400 transition-colors"
+                      >
+                        Delete
+                      </button>
+                    ) : (
+                      <div className="flex items-center gap-1">
+                        <button onClick={() => setConfirmId(null)} className="text-[10px] px-2 py-1 underline text-gray-400">Cancel</button>
+                        <button onClick={() => deleteOne(song)} className="shrink-0 text-xs px-3 py-1.5 rounded-lg bg-red-500 hover:bg-red-600 text-white font-medium">
+                          Confirm
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </li>
               );
             })}
