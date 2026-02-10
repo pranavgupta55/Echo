@@ -54,6 +54,18 @@ export default function PlaylistPage() {
 
   return (
     <div className="max-w-6xl mx-auto p-6 grid grid-cols-1 lg:grid-cols-3 gap-8">
+
+      <div className="lg:col-span-1">
+        <QueuePanel />
+      </div>
+
+      <AddSongsDrawer 
+        open={drawerOpen} 
+        onClose={() => setDrawerOpen(false)} 
+        playlistId={playlistId} 
+        onChanged={load}
+      />
+      
       <div className="lg:col-span-2 space-y-6">
         <PlayerControls floating />
         
@@ -95,17 +107,6 @@ export default function PlaylistPage() {
           )}
         </section>
       </div>
-
-      <div className="lg:col-span-1">
-        <QueuePanel />
-      </div>
-
-      <AddSongsDrawer 
-        open={drawerOpen} 
-        onClose={() => setDrawerOpen(false)} 
-        playlistId={playlistId} 
-        onChanged={load}
-      />
     </div>
   );
 }
