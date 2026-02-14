@@ -26,7 +26,7 @@ export function AudioProvider({ children }) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
-  const [isShuffle, setIsShuffle] = useState(true); // Default to true per request
+  const [isShuffle, setIsShuffle] = useState(true);
   
   const [repeatCount, setRepeatCount] = useState(0);
 
@@ -51,6 +51,19 @@ export function AudioProvider({ children }) {
 
   // --- QUEUE MANAGEMENT & REFILL LOGIC ---
   const next = useCallback(() => {
+    // 0. REPEAT CHECK (High Priority)
+    // If repeat count is active, we consume one count, rewind, and play.
+    // We strictly prevent advancing to the next track/queue index.
+    if (repeatCount > 0) {
+      setRepeatCount(prev => prev - 1);
+      if (audioRef.current) {
+        audioRef.current.currentTime = 0;
+        audioRef.current.play().catch(e => console.error("Repeat play error:", e));
+        setIsPlaying(true);
+      }
+      return; 
+    }
+
     // 1. Check Manual Queue
     if (manualQueue.length > 0) {
       const nextTrack = manualQueue[0];
@@ -63,11 +76,9 @@ export function AudioProvider({ children }) {
     const nextIdx = contextIndex + 1;
 
     // 3. REFILL LOGIC: If running low on songs, append shuffled copy of original
-    // Use functional state to ensure we have latest tracks if called rapidly
     setContextTracks(currentContext => {
       const remaining = currentContext.length - nextIdx;
       if (remaining < 20 && originalContext.length > 0) {
-        // Refill with a shuffled copy of the original playlist
         const freshBatch = shuffleArray(originalContext);
         return [...currentContext, ...freshBatch];
       }
@@ -75,22 +86,15 @@ export function AudioProvider({ children }) {
     });
 
     // 4. Advance
-    // Note: We read from state here, but since we just triggered a state update 
-    // for refill, we trust React/logic flow. If contextTracks updates, the index 
-    // is still valid relative to the start.
     if (nextIdx < contextTracks.length + (originalContext.length > 0 ? originalContext.length : 0)) {
         setContextIndex(nextIdx);
-        // If we just refilled, contextTracks isn't updated in this closure yet, 
-        // but we can grab from original logic or just rely on the fact that 
-        // we likely have enough tracks anyway if refill logic triggers.
-        // To be safe, we access the track via effect or wait for render, 
-        // but typically setting state works. For safety with async state:
-        const trackToPlay = contextTracks[nextIdx] || originalContext[0]; // Fallback safety
+        // Fallback safety for accessing the next track
+        const trackToPlay = contextTracks[nextIdx] || originalContext[0]; 
         setCurrentTrack(trackToPlay);
     } else {
       setIsPlaying(false);
     }
-  }, [manualQueue, contextIndex, contextTracks, originalContext]);
+  }, [repeatCount, manualQueue, contextIndex, contextTracks, originalContext]);
 
   const prev = useCallback(() => {
     const audio = audioRef.current;
@@ -119,21 +123,13 @@ export function AudioProvider({ children }) {
     const audio = audioRef.current;
     if (!audio) return;
 
-    const handleEnded = () => {
-      if (repeatCount > 0) {
-        // Repeat mode active: rewind, play, decrement
-        setRepeatCount(c => c - 1);
-        audio.currentTime = 0;
-        audio.play().catch(e => console.error("Replay error:", e));
-      } else {
-        // Normal mode
-        next();
-      }
-    };
+    // We simply call next() here. 
+    // Since next() now contains the repeat logic, it will handle rewinding or advancing.
+    const handleEnded = () => next();
 
     audio.addEventListener('ended', handleEnded);
     return () => audio.removeEventListener('ended', handleEnded);
-  }, [repeatCount, next]); // Re-bind when repeatCount changes
+  }, [next]); 
 
   // --- JIT URL SIGNING (Fixes 30min freeze) ---
   useEffect(() => {
@@ -156,7 +152,7 @@ export function AudioProvider({ children }) {
       }
 
       if (active && audioRef.current && srcToPlay) {
-        // Only reload if the source actually changed to avoid blips
+        // Only reload if the source actually changed
         if (audioRef.current.src !== srcToPlay) {
           audioRef.current.src = srcToPlay;
           audioRef.current.load();
@@ -169,7 +165,7 @@ export function AudioProvider({ children }) {
 
     loadTrackSrc();
     return () => { active = false; };
-  }, [currentTrack]); // Only run when the track object changes
+  }, [currentTrack]); 
 
   // --- MEDIA SESSION HANDLERS ---
   useEffect(() => {
@@ -223,8 +219,8 @@ export function AudioProvider({ children }) {
     setContextIndex(startIndex);
     setCurrentTrack(tracks[startIndex]);
     setManualQueue([]); 
-    setIsShuffle(true); // Default to shuffle on new context
-    setRepeatCount(0); // Reset repeat on new playlist
+    setIsShuffle(true); 
+    setRepeatCount(0); 
     
     if (autoPlay) {
       setIsPlaying(true);
@@ -247,7 +243,7 @@ export function AudioProvider({ children }) {
       setContextTracks(newSequence);
       setIsShuffle(true);
     } else {
-      // Turn Shuffle OFF (Revert to original order relative to current song)
+      // Turn Shuffle OFF
       const currentId = currentTrack?.id;
       const originalIdx = originalContext.findIndex(t => t.id === currentId);
       setContextTracks(originalContext);
