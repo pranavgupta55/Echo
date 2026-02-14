@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useParams } from 'react-router-dom';
 import { supabase } from '../lib/supabaseClient';
 import { useAudio } from '../context/AudioContext.jsx';
@@ -6,12 +6,23 @@ import PlayerControls from '../components/PlayerControls.jsx';
 import QueuePanel from '../components/QueuePanel.jsx';
 import AddSongsDrawer from '../components/AddSongsDrawer.jsx';
 
+// Simple shuffle helper for initial load
+const shuffle = (array) => {
+  const arr = [...array];
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+};
+
 export default function PlaylistPage() {
   const { id: playlistId } = useParams();
-  const { startContext, addToQueue } = useAudio();
+  const { startContext, addToQueue, currentTrack } = useAudio();
   const [tracks, setTracks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const initialized = useRef(false);
 
   const load = async () => {
     setLoading(true);
@@ -23,24 +34,15 @@ export default function PlaylistPage() {
         .order('position', { ascending: true });
       if (error) throw error;
 
-      // Filter out any rows where the song join failed (safety against broken refs)
       const validRows = (rows || []).filter(r => r.songs);
       
-      const paths = validRows.map(r => r.songs.storage_path);
-      if (!paths.length) { 
-        setTracks([]); 
-        setLoading(false); 
-        return; 
-      }
-      
-      const { data: signed } = await supabase.storage.from('songs').createSignedUrls(paths, 3600);
-      
-      const ts = validRows.map((r, i) => ({ 
+      // Map to track objects WITHOUT signed URLs (JIT signing handled in AudioContext)
+      const ts = validRows.map((r) => ({ 
         id: r.songs.id, 
         title: r.songs.title, 
         artist: r.songs.artist || 'Unknown', 
-        url: signed?.[i]?.signedUrl || ''
-      })).filter(t => t.url); // Only keep tracks with valid signed URLs
+        storage_path: r.songs.storage_path
+      }));
 
       setTracks(ts);
     } catch (err) {
@@ -50,7 +52,27 @@ export default function PlaylistPage() {
     }
   };
 
-  useEffect(() => { if (playlistId) load(); }, [playlistId]);
+  useEffect(() => { 
+    if (playlistId) {
+      initialized.current = false; // Reset init flag on ID change
+      load(); 
+    }
+  }, [playlistId]);
+
+  // Auto-populate queue on first load
+  useEffect(() => {
+    if (!loading && tracks.length > 0 && !initialized.current) {
+      // If nothing is playing (or we want to overwrite), populate queue
+      // Default to shuffled order as requested
+      const shuffledTracks = shuffle(tracks);
+      
+      // startContext(tracks, startIndex, autoPlay)
+      // autoPlay is false so it doesn't blast music immediately
+      startContext(shuffledTracks, 0, false);
+      
+      initialized.current = true;
+    }
+  }, [loading, tracks, startContext]);
 
   return (
     <div className="max-w-6xl mx-auto p-6 grid grid-cols-1 lg:grid-cols-3 gap-8">
@@ -87,11 +109,16 @@ export default function PlaylistPage() {
           ) : (
             <ul className="space-y-1">
               {tracks.map((t, i) => (
-                <li key={t.id} className="group flex items-center justify-between p-3 rounded-lg hover:bg-white/5 transition-colors cursor-pointer">
-                  <div className="flex items-center gap-4 flex-1 min-w-0" onClick={() => startContext(tracks, i)}>
+                <li 
+                  key={t.id} 
+                  className={`group flex items-center justify-between p-3 rounded-lg hover:bg-white/5 transition-colors cursor-pointer ${currentTrack?.id === t.id ? 'bg-white/10' : ''}`}
+                >
+                  <div className="flex items-center gap-4 flex-1 min-w-0" onClick={() => startContext(tracks, i, true)}>
                     <span className="w-4 text-xs text-gray-500 group-hover:text-white">{i + 1}</span>
                     <div className="min-w-0">
-                      <div className="text-sm font-medium text-white truncate">{t.title}</div>
+                      <div className={`text-sm font-medium truncate ${currentTrack?.id === t.id ? 'text-green-400' : 'text-white'}`}>
+                        {t.title}
+                      </div>
                       <div className="text-xs text-gray-400 truncate">{t.artist}</div>
                     </div>
                   </div>
