@@ -1,5 +1,5 @@
 import { useAudio } from '../context/AudioContext.jsx';
-import { HiBackward, HiForward, HiPlay, HiPause, HiArrowsRightLeft } from 'react-icons/hi2';
+import { HiBackward, HiForward, HiPlay, HiPause, HiArrowsRightLeft, HiArrowPath } from 'react-icons/hi2';
 
 const fmt = (t) => {
   const s = Math.max(0, Math.floor(t || 0));
@@ -9,12 +9,21 @@ const fmt = (t) => {
 };
 
 export default function PlayerControls({ floating = false }) {
-  const { currentTrack, isPlaying, currentTime, duration, toggle, next, prev, seek, isShuffle, toggleShuffle } = useAudio();
+  const { 
+    currentTrack, isPlaying, currentTime, duration, 
+    toggle, next, prev, seek, 
+    isShuffle, toggleShuffle,
+    repeatCount, incrementRepeat 
+  } = useAudio();
 
   return (
     <div className={`${floating ? 'rounded-2xl bg-white/5 backdrop-blur-2xl border border-white/10 shadow-2xl' : ''} p-6`}>
       <div className="flex flex-col items-center gap-4">
+        
+        {/* Controls Row */}
         <div className="flex items-center justify-center gap-6 sm:gap-8">
+          
+          {/* Shuffle Button */}
           <button 
             onClick={toggleShuffle} 
             className={`p-2 transition-colors ${isShuffle ? 'text-green-400' : 'text-gray-500 hover:text-white'}`}
@@ -23,19 +32,40 @@ export default function PlayerControls({ floating = false }) {
             <HiArrowsRightLeft className="w-5 h-5" />
           </button>
           
+          {/* Prev */}
           <button onClick={prev} className="p-2 text-gray-300 hover:text-white transition-colors" title="Previous">
             <HiBackward className="w-7 h-7" />
           </button>
           
+          {/* Play/Pause */}
           <button onClick={toggle} className="w-12 h-12 flex items-center justify-center rounded-full bg-white text-black hover:scale-105 transition-transform shadow-lg" title="Play/Pause">
             {isPlaying ? <HiPause className="w-6 h-6" /> : <HiPlay className="w-6 h-6 translate-x-0.5" />}
           </button>
           
+          {/* Next */}
           <button onClick={next} className="p-2 text-gray-300 hover:text-white transition-colors" title="Next">
             <HiForward className="w-7 h-7" />
           </button>
+
+          {/* Repeat Button with Counter */}
+          <div className="relative group flex items-center justify-center">
+            {repeatCount > 0 && (
+              <div className="absolute -top-3 text-[9px] font-bold text-green-400 bg-black/50 px-1 rounded">
+                {repeatCount}
+              </div>
+            )}
+            <button 
+              onClick={incrementRepeat}
+              className={`p-2 transition-colors ${repeatCount > 0 ? 'text-green-400' : 'text-gray-500 hover:text-white'}`}
+              title="Repeat Song"
+            >
+              <HiArrowPath className="w-5 h-5" />
+            </button>
+          </div>
+
         </div>
 
+        {/* Scrubber & Info */}
         <div className="w-full space-y-1">
           <div className="flex items-center gap-3">
             <span className="w-10 text-[10px] tabular-nums text-gray-500 text-right">{fmt(currentTime)}</span>
