@@ -1,7 +1,18 @@
 import { createContext, useContext, useRef, useState, useEffect, useCallback, useMemo } from 'react';
+import { supabase } from '../lib/supabaseClient';
 
 const AudioContextState = createContext(null);
 export const useAudio = () => useContext(AudioContextState);
+
+// Helper to shuffle an array
+const shuffleArray = (array) => {
+  const arr = [...array];
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+};
 
 export function AudioProvider({ children }) {
   const audioRef = useRef(typeof Audio !== 'undefined' ? new Audio() : null);
@@ -15,10 +26,12 @@ export function AudioProvider({ children }) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
-  const [isShuffle, setIsShuffle] = useState(false);
+  const [isShuffle, setIsShuffle] = useState(true); // Default to true per request
+  
+  const [repeatCount, setRepeatCount] = useState(0);
 
   const play = useCallback(() => { 
-    audioRef.current?.play(); 
+    audioRef.current?.play().catch(e => console.error("Play error:", e)); 
     setIsPlaying(true); 
   }, []);
 
@@ -36,29 +49,53 @@ export function AudioProvider({ children }) {
     }
   }, []);
 
+  // --- QUEUE MANAGEMENT & REFILL LOGIC ---
   const next = useCallback(() => {
+    // 1. Check Manual Queue
     if (manualQueue.length > 0) {
       const nextTrack = manualQueue[0];
       setManualQueue(prev => prev.slice(1));
       setCurrentTrack(nextTrack);
-    } else {
-      const nextIdx = contextIndex + 1;
-      if (nextIdx < contextTracks.length) {
-        setContextIndex(nextIdx);
-        setCurrentTrack(contextTracks[nextIdx]);
-      } else {
-        setIsPlaying(false);
-      }
-    }
-  }, [manualQueue, contextTracks, contextIndex]);
+      return;
+    } 
 
-  // --- MODIFIED: SMART REWIND LOGIC ---
+    // 2. Determine next index in Context
+    const nextIdx = contextIndex + 1;
+
+    // 3. REFILL LOGIC: If running low on songs, append shuffled copy of original
+    // Use functional state to ensure we have latest tracks if called rapidly
+    setContextTracks(currentContext => {
+      const remaining = currentContext.length - nextIdx;
+      if (remaining < 20 && originalContext.length > 0) {
+        // Refill with a shuffled copy of the original playlist
+        const freshBatch = shuffleArray(originalContext);
+        return [...currentContext, ...freshBatch];
+      }
+      return currentContext;
+    });
+
+    // 4. Advance
+    // Note: We read from state here, but since we just triggered a state update 
+    // for refill, we trust React/logic flow. If contextTracks updates, the index 
+    // is still valid relative to the start.
+    if (nextIdx < contextTracks.length + (originalContext.length > 0 ? originalContext.length : 0)) {
+        setContextIndex(nextIdx);
+        // If we just refilled, contextTracks isn't updated in this closure yet, 
+        // but we can grab from original logic or just rely on the fact that 
+        // we likely have enough tracks anyway if refill logic triggers.
+        // To be safe, we access the track via effect or wait for render, 
+        // but typically setting state works. For safety with async state:
+        const trackToPlay = contextTracks[nextIdx] || originalContext[0]; // Fallback safety
+        setCurrentTrack(trackToPlay);
+    } else {
+      setIsPlaying(false);
+    }
+  }, [manualQueue, contextIndex, contextTracks, originalContext]);
+
   const prev = useCallback(() => {
     const audio = audioRef.current;
     if (!audio) return;
 
-    // Logic: If track is past 5s, restart it. 
-    // If before 5s, go to actual previous track.
     if (audio.currentTime > 5) {
       seek(0);
     } else {
@@ -67,33 +104,89 @@ export function AudioProvider({ children }) {
         setContextIndex(prevIdx);
         setCurrentTrack(contextTracks[prevIdx]);
       } else {
-        // Optional: restart song anyway if it's the first song in playlist
         seek(0);
       }
     }
   }, [contextIndex, contextTracks, seek]);
 
-  // --- NEW: MEDIA SESSION HANDLING (Hardware/Headphone buttons) ---
+  // --- REPEAT BUTTON LOGIC ---
+  const incrementRepeat = useCallback(() => {
+    setRepeatCount(c => c + 1);
+  }, []);
+
+  // --- HANDLE ENDED EVENT ---
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    const handleEnded = () => {
+      if (repeatCount > 0) {
+        // Repeat mode active: rewind, play, decrement
+        setRepeatCount(c => c - 1);
+        audio.currentTime = 0;
+        audio.play().catch(e => console.error("Replay error:", e));
+      } else {
+        // Normal mode
+        next();
+      }
+    };
+
+    audio.addEventListener('ended', handleEnded);
+    return () => audio.removeEventListener('ended', handleEnded);
+  }, [repeatCount, next]); // Re-bind when repeatCount changes
+
+  // --- JIT URL SIGNING (Fixes 30min freeze) ---
+  useEffect(() => {
+    let active = true;
+    
+    const loadTrackSrc = async () => {
+      if (!currentTrack) return;
+
+      let srcToPlay = currentTrack.url;
+
+      // If no pre-signed URL, generate one now
+      if (!srcToPlay && currentTrack.storage_path) {
+        const { data, error } = await supabase.storage
+          .from('songs')
+          .createSignedUrls([currentTrack.storage_path], 3600); // Valid for 1 hour
+        
+        if (!error && data && data[0]) {
+          srcToPlay = data[0].signedUrl;
+        }
+      }
+
+      if (active && audioRef.current && srcToPlay) {
+        // Only reload if the source actually changed to avoid blips
+        if (audioRef.current.src !== srcToPlay) {
+          audioRef.current.src = srcToPlay;
+          audioRef.current.load();
+          if (isPlaying) {
+            audioRef.current.play().catch(e => console.error("JIT Play error:", e));
+          }
+        }
+      }
+    };
+
+    loadTrackSrc();
+    return () => { active = false; };
+  }, [currentTrack]); // Only run when the track object changes
+
+  // --- MEDIA SESSION HANDLERS ---
   useEffect(() => {
     if ('mediaSession' in navigator && currentTrack) {
-      // Update the UI on the user's OS/Headphones
       navigator.mediaSession.metadata = new MediaMetadata({
         title: currentTrack.title || 'Untitled',
         artist: currentTrack.artist || 'Unknown Artist',
         album: 'Echo',
-        artwork: [
-          { src: '/Logo.png', sizes: '512x512', type: 'image/png' }
-        ]
+        artwork: [{ src: '/Logo.png', sizes: '512x512', type: 'image/png' }]
       });
 
-      // Link hardware buttons to our functions
       navigator.mediaSession.setActionHandler('play', play);
       navigator.mediaSession.setActionHandler('pause', pause);
       navigator.mediaSession.setActionHandler('previoustrack', prev);
       navigator.mediaSession.setActionHandler('nexttrack', next);
-      navigator.mediaSession.setActionHandler('seekto', (details) => seek(details.seekTime));
+      navigator.mediaSession.setActionHandler('seekto', (d) => seek(d.seekTime));
 
-      // Clean up handlers on unmount or track change
       return () => {
         navigator.mediaSession.setActionHandler('play', null);
         navigator.mediaSession.setActionHandler('pause', null);
@@ -104,23 +197,13 @@ export function AudioProvider({ children }) {
     }
   }, [currentTrack, play, pause, next, prev, seek]);
 
-  // Update Media Session Playback State
   useEffect(() => {
     if ('mediaSession' in navigator) {
       navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
     }
   }, [isPlaying]);
 
-  useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio || !currentTrack?.url) return;
-    if (audio.src !== currentTrack.url) {
-      audio.src = currentTrack.url;
-      audio.load();
-      if (isPlaying) audio.play().catch(() => {});
-    }
-  }, [currentTrack]);
-
+  // --- TIME UPDATE HANDLER ---
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
@@ -128,54 +211,43 @@ export function AudioProvider({ children }) {
       setCurrentTime(audio.currentTime);
       setDuration(audio.duration || 0);
     };
-    const onEnded = () => next();
-    
     audio.addEventListener('timeupdate', onTime);
-    audio.addEventListener('ended', onEnded);
-    return () => {
-      audio.removeEventListener('timeupdate', onTime);
-      audio.removeEventListener('ended', onEnded);
-    };
-  }, [next]);
+    return () => audio.removeEventListener('timeupdate', onTime);
+  }, []);
 
-  const startContext = useCallback((tracks, startIndex = 0) => {
+  const startContext = useCallback((tracks, startIndex = 0, autoPlay = true) => {
     if (!tracks || tracks.length === 0) return;
+    
     setOriginalContext(tracks);
     setContextTracks(tracks);
     setContextIndex(startIndex);
     setCurrentTrack(tracks[startIndex]);
     setManualQueue([]); 
-    setIsShuffle(false);
-    setIsPlaying(true);
+    setIsShuffle(true); // Default to shuffle on new context
+    setRepeatCount(0); // Reset repeat on new playlist
+    
+    if (autoPlay) {
+      setIsPlaying(true);
+    } else {
+      setIsPlaying(false);
+    }
   }, []);
 
-  const addToQueue = (track) => {
-    if (!track) return;
-    setManualQueue(prev => [...prev, track]);
-  };
-
-  const playNext = (track) => {
-    if (!track) return;
-    setManualQueue(prev => [track, ...prev]);
-  };
-
-  const removeFromManual = (id) => {
-    setManualQueue(prev => prev.filter(t => t.id !== id));
-  };
-
+  const addToQueue = (track) => { if (track) setManualQueue(prev => [...prev, track]); };
+  const playNext = (track) => { if (track) setManualQueue(prev => [track, ...prev]); };
+  const removeFromManual = (id) => setManualQueue(prev => prev.filter(t => t.id !== id));
   const clearManualQueue = () => setManualQueue([]);
 
   const toggleShuffle = useCallback(() => {
     if (!isShuffle) {
+      // Turn Shuffle ON
       const remaining = [...contextTracks.slice(contextIndex + 1)];
-      for (let i = remaining.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [remaining[i], remaining[j]] = [remaining[j], remaining[i]];
-      }
-      const newSequence = [...contextTracks.slice(0, contextIndex + 1), ...remaining];
+      const shuffled = shuffleArray(remaining);
+      const newSequence = [...contextTracks.slice(0, contextIndex + 1), ...shuffled];
       setContextTracks(newSequence);
       setIsShuffle(true);
     } else {
+      // Turn Shuffle OFF (Revert to original order relative to current song)
       const currentId = currentTrack?.id;
       const originalIdx = originalContext.findIndex(t => t.id === currentId);
       setContextTracks(originalContext);
@@ -186,10 +258,10 @@ export function AudioProvider({ children }) {
 
   const value = useMemo(() => ({
     currentTrack, manualQueue, contextTracks, contextIndex,
-    isPlaying, currentTime, duration, isShuffle,
+    isPlaying, currentTime, duration, isShuffle, repeatCount,
     play, pause, toggle, next, prev, seek,
-    startContext, addToQueue, playNext, removeFromManual, clearManualQueue, toggleShuffle
-  }), [currentTrack, manualQueue, contextTracks, contextIndex, isPlaying, currentTime, duration, isShuffle, next, prev, toggleShuffle, play, pause, toggle, seek, startContext]);
+    startContext, addToQueue, playNext, removeFromManual, clearManualQueue, toggleShuffle, incrementRepeat
+  }), [currentTrack, manualQueue, contextTracks, contextIndex, isPlaying, currentTime, duration, isShuffle, repeatCount, next, prev, toggleShuffle, play, pause, toggle, seek, startContext, incrementRepeat]);
 
   return <AudioContextState.Provider value={value}>{children}</AudioContextState.Provider>;
 }
