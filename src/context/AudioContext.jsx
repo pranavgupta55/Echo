@@ -100,7 +100,7 @@ export function AudioProvider({ children }) {
     const audio = audioRef.current;
     if (!audio) return;
 
-    if (audio.currentTime > 5) {
+    if (audio.currentTime > 2) {
       seek(0);
     } else {
       const prevIdx = contextIndex - 1;
